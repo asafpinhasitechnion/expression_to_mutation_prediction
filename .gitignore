@@ -1,0 +1,28 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments / tooling
+.env
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Editor settings
+.vscode/
+.idea/
+
+# Large artifacts
+cache/
+results/
+*.log
+
+# OS junk
+.DS_Store
+Thumbs.db
+

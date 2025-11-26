@@ -1,0 +1,68 @@
+# Data paths
+data:
+  # expression_path: "C:/Users/KerenYlab.MEDICINE/OneDrive - Technion/Asaf/Data/RNA/TCGA/Xena/tcga_xena_data"
+  # mutation_path: "C:/Users/KerenYlab.MEDICINE/OneDrive - Technion/Asaf/Data/RNA/TCGA/Xena/tcga_xena_mutations_data"
+  expression_path: "C:/Users/KerenYlab.MEDICINE/OneDrive - Technion/Asaf/Expression_to_Mutation/Data/downloads"
+  mutation_path: "C:/Users/KerenYlab.MEDICINE/OneDrive - Technion/Asaf/Expression_to_Mutation/Data/tcga_xena_mutations"
+  cancer_types: []  # e.g., ["BRCA", "LUAD"]; empty list loads all available cohorts
+  download_missing: true
+  expression_base_url: "https://gdc-hub.s3.us-east-1.amazonaws.com/download"
+  mutation_base_url: "https://gdc-hub.s3.us-east-1.amazonaws.com/download"
+  expression_file_template: "TCGA-{cancer}.star_{measure}.tsv.gz"  # measure ∈ {"counts", "tpm"}
+  mutation_file_template: "mc3_gene_level%2F{cancer}_mc3_gene_level.txt.gz"
+  gene_name_mapping_path: "C:/Users/KerenYlab.MEDICINE/OneDrive - Technion/Asaf/Expression_to_Mutation/Data/downloads/gencode.v36.annotation.gtf.gene.probemap"
+  gene_annotation_path: "C:/Users/KerenYlab.MEDICINE/OneDrive - Technion/Asaf/Expression_to_Mutation/Data/downloads/gencode.v36.annotation.gtf.gz"
+  output_path: "results"
+  min_mutations_per_gene: 0.05
+
+# Preprocessing parameters
+preprocessing:
+  min_samples_per_gene: 10
+  min_variance: 0.1
+  test_size: 0.2
+  random_state: 42
+
+# Feature selection
+features:
+  n_features: 1000
+  method: "variance"  # Options: variance, mutual_info, lasso
+
+# Model parameters
+model:
+  name: "random_forest"  # Options: random_forest, xgboost, neural_net, multitask_nn
+  random_forest:
+    n_estimators: 100
+    max_depth: 10
+    min_samples_split: 5
+    class_weight: "balanced"
+  xgboost:
+    n_estimators: 100
+    max_depth: 6
+    learning_rate: 0.1
+  neural_net:
+    hidden_layers: [256, 128, 64]
+    dropout_rate: 0.3
+    learning_rate: 0.001
+    batch_size: 32
+    epochs: 50
+    normalize_inputs: true
+  multitask_nn:
+    hidden_layers: [512, 256, 128]
+    dropout_rate: 0.2
+    head_layers: []
+    learning_rate: 0.0005
+    weight_decay: 0.0001
+    batch_size: 128
+    epochs: 60
+    validation_split: 0.15
+    patience: 10
+    gradient_clip: 1.0
+    use_pos_weight: true
+    pretrained_encoder_path: null
+    freeze_encoder: false
+    normalize_inputs: true
+
+# Evaluation
+evaluation:
+  metrics: ["accuracy", "precision", "recall", "f1", "roc_auc"]
+  cv_folds: 5 
