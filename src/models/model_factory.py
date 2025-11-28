@@ -30,6 +30,55 @@ except ImportError:  # pragma: no cover - optional dependency
     LGBMClassifier = None
 
 
+class WeightedBCEWithLogitsLoss(nn.Module):
+    """BCE with Logits Loss with per-gene weighting based on mutation prevalence."""
+    
+    def __init__(self, gene_weights: torch.Tensor, pos_weight: torch.Tensor | None = None):
+        """
+        Args:
+            gene_weights: Tensor of shape (n_genes,) - weight for each gene based on prevalence
+            pos_weight: Optional tensor of shape (n_genes,) - positive class weight for each gene
+        """
+        super().__init__()
+        self.register_buffer('gene_weights', gene_weights)
+        self.register_buffer('pos_weight', pos_weight)
+        # Use reduction='none' to get per-sample, per-gene loss
+        self.base_loss = nn.BCEWithLogitsLoss(reduction='none')
+    
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            logits: Tensor of shape (batch_size, n_genes)
+            targets: Tensor of shape (batch_size, n_genes)
+        
+        Returns:
+            Scalar loss value
+        """
+        # Compute per-sample, per-gene loss: shape (batch_size, n_genes)
+        # Note: base_loss with reduction='none' doesn't apply pos_weight automatically
+        loss_per_gene = self.base_loss(logits, targets)
+        
+        # Apply positive class weighting if provided
+        # pos_weight increases the loss contribution of positive samples
+        # Formula: loss = -pos_weight * y * log(sigmoid(logit)) - (1-y) * log(1-sigmoid(logit))
+        if self.pos_weight is not None:
+            pos_mask = targets > 0.5
+            # For positive samples, multiply by the corresponding gene's pos_weight
+            # pos_weight shape: (n_genes,), pos_mask shape: (batch_size, n_genes)
+            pos_weight_expanded = self.pos_weight.unsqueeze(0)  # (1, n_genes)
+            loss_per_gene = torch.where(
+                pos_mask,
+                loss_per_gene * pos_weight_expanded,
+                loss_per_gene
+            )
+        
+        # Apply gene weights and average: shape (batch_size, n_genes) -> scalar
+        # Gene weights are normalized so average is 1.0, maintaining loss scale
+        weighted_loss = (loss_per_gene * self.gene_weights.unsqueeze(0)).mean()
+        
+        return weighted_loss
+
+
 class BaseModel(ABC):
     @abstractmethod
     def fit(self, X, y):
@@ -376,6 +425,7 @@ class MultitaskMutationModel(BaseModel):
         self.patience = kwargs.get('patience', 10)
         self.gradient_clip = kwargs.get('gradient_clip', 1.0)
         self.use_pos_weight = kwargs.get('use_pos_weight', True)
+        self.gene_weight_by_prevalence = kwargs.get('gene_weight_by_prevalence', False)
         self.pretrained_encoder_path = kwargs.get('pretrained_encoder_path')
         self.freeze_encoder = kwargs.get('freeze_encoder', False)
         self.normalize_inputs = kwargs.get('normalize_inputs', True)
@@ -385,6 +435,7 @@ class MultitaskMutationModel(BaseModel):
         self.optimizer = None
         self.criterion = None
         self.scaler: StandardScaler | None = None
+        self.gene_weights: torch.Tensor | None = None
 
     def _build_network(self):
         net = MultitaskMutationNet(
@@ -456,6 +507,23 @@ class MultitaskMutationModel(BaseModel):
         else:
             pos_weight = None
 
+        # Compute gene weights based on mutation prevalence if enabled
+        if self.gene_weight_by_prevalence:
+            # Gene weight = mutation frequency (proportion of samples with mutation)
+            # More frequent mutations get higher weight
+            mutation_freq = y_train_tensor.mean(dim=0)  # Shape: (n_genes,)
+            # Normalize to sum to n_genes (so average weight is 1.0)
+            # This ensures the overall loss scale doesn't change dramatically
+            if mutation_freq.sum() > 0:
+                gene_weights = mutation_freq / mutation_freq.mean()
+            else:
+                gene_weights = torch.ones_like(mutation_freq)
+            # Clamp to reasonable range to avoid extreme weights
+            gene_weights = torch.clamp(gene_weights, min=0.1, max=10.0)
+            self.gene_weights = gene_weights.to(self.device)
+        else:
+            self.gene_weights = None
+
         return train_loader, val_loader, pos_weight
 
     def fit(self, X: np.ndarray | pd.DataFrame, y: np.ndarray | pd.DataFrame):
@@ -468,7 +536,16 @@ class MultitaskMutationModel(BaseModel):
         self.model = self._build_network().to(self.device)
         params = [p for p in self.model.parameters() if p.requires_grad]
         self.optimizer = optim.Adam(params, lr=self.lr, weight_decay=self.weight_decay)
-        self.criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight) if pos_weight is not None else nn.BCEWithLogitsLoss()
+        
+        # Use weighted loss if gene weighting is enabled
+        if self.gene_weight_by_prevalence and self.gene_weights is not None:
+            self.criterion = WeightedBCEWithLogitsLoss(
+                gene_weights=self.gene_weights,
+                pos_weight=pos_weight
+            )
+        else:
+            # Standard BCE loss with optional pos_weight
+            self.criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight) if pos_weight is not None else nn.BCEWithLogitsLoss()
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer,
             mode='min',
