@@ -58,11 +58,12 @@ model:
     patience: 10
     gradient_clip: 1.0
     use_pos_weight: true
+    gene_weight_by_prevalence: false  # Weight genes by mutation frequency (more frequent = higher weight)
     pretrained_encoder_path: null
     freeze_encoder: false
     normalize_inputs: true
 
 # Evaluation
 evaluation:
-  metrics: ["accuracy", "precision", "recall", "f1", "roc_auc"]
+  metrics: ["accuracy", "precision", "recall", "f1", "roc_auc", "auprc", "specificity", "mcc"]
   cv_folds: 5 

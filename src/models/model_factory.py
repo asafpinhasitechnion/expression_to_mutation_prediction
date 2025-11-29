@@ -408,6 +408,20 @@ class MultitaskMutationNet(nn.Module):
 
     def load_encoder_state(self, state_dict):
         self.feature_extractor.load_state_dict(state_dict)
+    
+    def get_head_weights(self):
+        """
+        Extract the weights of the final linear layer in the head.
+        
+        Returns:
+            torch.Tensor: Weight matrix of shape (output_size, hidden_size)
+                         where hidden_size is the last dimension before the output layer
+        """
+        # Find the last Linear layer in the head Sequential
+        for module in reversed(self.head):
+            if isinstance(module, nn.Linear):
+                return module.weight.detach().clone()
+        raise ValueError("No Linear layer found in head")
 
 
 class MultitaskMutationModel(BaseModel):
@@ -585,6 +599,102 @@ class MultitaskMutationModel(BaseModel):
 
         if best_state is not None:
             self.model.load_state_dict(best_state)
+
+    def fit_full_dataset(self, X: np.ndarray | pd.DataFrame, y: np.ndarray | pd.DataFrame):
+        """
+        Train the model on the full dataset without validation split.
+        Useful for extracting learned representations.
+        
+        Args:
+            X: Input features
+            y: Target labels
+        """
+        if isinstance(X, pd.DataFrame):
+            X = X.values
+        if isinstance(y, pd.DataFrame):
+            y = y.values
+
+        X = np.asarray(X, dtype=np.float32)
+        y = np.asarray(y, dtype=np.float32)
+
+        if not np.isfinite(X).all():
+            raise ValueError("Input features contain NaNs or infs. Please clean the data before training.")
+        if not np.isfinite(y).all():
+            raise ValueError("Target matrix contains NaNs or infs.")
+
+        if self.normalize_inputs:
+            self.scaler = StandardScaler()
+            X = self.scaler.fit_transform(X).astype(np.float32)
+        else:
+            self.scaler = None
+
+        X_tensor = torch.from_numpy(X)
+        y_tensor = torch.from_numpy(y)
+
+        train_loader = DataLoader(
+            TensorDataset(X_tensor, y_tensor),
+            batch_size=self.batch_size,
+            shuffle=True,
+            drop_last=False
+        )
+
+        # Compute pos_weight for full dataset
+        if self.use_pos_weight:
+            pos_counts = y_tensor.sum(dim=0)
+            neg_counts = y_tensor.shape[0] - pos_counts
+            pos_weight = torch.where(pos_counts > 0, neg_counts / pos_counts, torch.ones_like(pos_counts))
+            pos_weight = torch.clamp(pos_weight, min=1.0, max=1e6)
+            pos_weight = pos_weight.to(self.device)
+        else:
+            pos_weight = None
+
+        # Compute gene weights if enabled
+        if self.gene_weight_by_prevalence:
+            mutation_freq = y_tensor.mean(dim=0)
+            if mutation_freq.sum() > 0:
+                gene_weights = mutation_freq / mutation_freq.mean()
+            else:
+                gene_weights = torch.ones_like(mutation_freq)
+            gene_weights = torch.clamp(gene_weights, min=0.1, max=10.0)
+            self.gene_weights = gene_weights.to(self.device)
+        else:
+            self.gene_weights = None
+
+        # Build model and setup training
+        self.model = self._build_network().to(self.device)
+        params = [p for p in self.model.parameters() if p.requires_grad]
+        self.optimizer = optim.Adam(params, lr=self.lr, weight_decay=self.weight_decay)
+        
+        # Use weighted loss if gene weighting is enabled
+        if self.gene_weight_by_prevalence and self.gene_weights is not None:
+            self.criterion = WeightedBCEWithLogitsLoss(
+                gene_weights=self.gene_weights,
+                pos_weight=pos_weight
+            )
+        else:
+            self.criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight) if pos_weight is not None else nn.BCEWithLogitsLoss()
+
+        # Train on full dataset
+        self.training_history = []
+        for epoch in range(self.epochs):
+            train_loss = self._run_epoch(train_loader, train=True)
+            self.training_history.append({
+                'epoch': epoch,
+                'train_loss': train_loss,
+                'lr': self.optimizer.param_groups[0]['lr']
+            })
+
+    def get_head_weights(self):
+        """
+        Extract the weights of the final linear layer in the head.
+        
+        Returns:
+            torch.Tensor: Weight matrix of shape (output_size, hidden_size)
+                         where hidden_size is the last dimension before the output layer
+        """
+        if self.model is None:
+            raise ValueError("Model has not been trained yet. Call fit() or fit_full_dataset() first.")
+        return self.model.get_head_weights()
 
     def _run_epoch(self, loader: DataLoader, train: bool = True) -> float:
         if train:
