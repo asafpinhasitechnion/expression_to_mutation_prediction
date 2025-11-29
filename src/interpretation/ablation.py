@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import gc
 import json
 from pathlib import Path
 from typing import Dict
@@ -139,16 +140,26 @@ def run_gene_ablation_analysis(
                 gene_dir.mkdir(parents=True, exist_ok=True)
                 metrics_df.to_csv(gene_dir / "metrics.csv")
                 
+                # Save predictions (create DataFrames only for saving, then delete)
                 preds_df = pd.DataFrame(Y_pred, columns=remaining_genes, index=test_ids_fold)
                 probs_df = pd.DataFrame(Y_prob, columns=remaining_genes, index=test_ids_fold)
                 preds_df.to_csv(gene_dir / "predictions.csv")
                 probs_df.to_csv(gene_dir / "probabilities.csv")
+                del preds_df, probs_df
                 
                 model.save(gene_dir)
+                
+                # Clean up model and predictions from memory
+                del model, Y_pred, Y_prob
+                gc.collect()
             
             # Aggregate metrics across folds (mean)
             stacked_metrics = pd.concat(fold_metrics)
             metrics_df = stacked_metrics.groupby(level=0).mean()
+            
+            # Clean up fold metrics from memory
+            del fold_metrics, stacked_metrics
+            gc.collect()
             
             # Save aggregated metrics
             gene_dir = ablation_dir / f"removed_{removed_gene}"
@@ -197,20 +208,29 @@ def run_gene_ablation_analysis(
             gene_dir.mkdir(exist_ok=True)
             metrics_df.to_csv(gene_dir / "metrics.csv")
             
-            # Save predictions
+            # Save predictions (create DataFrames only for saving, then delete)
             preds_df = pd.DataFrame(Y_pred, columns=remaining_genes, index=test_ids)
             probs_df = pd.DataFrame(Y_prob, columns=remaining_genes, index=test_ids)
             preds_df.to_csv(gene_dir / "predictions.csv")
             probs_df.to_csv(gene_dir / "probabilities.csv")
+            del preds_df, probs_df
             
             model.save(gene_dir)
+            
+            # Clean up model and predictions from memory
+            del model, Y_pred, Y_prob, Y_train_ablation, Y_test_ablation
+            gc.collect()
         
-        # Store aggregated metrics for this removed gene
+        # Store aggregated metrics for this removed gene (only keep metrics, not full DataFrame)
         for metric_name in metrics_df.columns:
             if metric_name not in all_metrics:
                 all_metrics[metric_name] = {}
             
             all_metrics[metric_name][removed_gene] = metrics_df[metric_name].to_dict()
+        
+        # Clean up metrics DataFrame from memory
+        del metrics_df
+        gc.collect()
     
     # Build matrices for each metric
     print(f"\n📊 Building ablation matrices...")
