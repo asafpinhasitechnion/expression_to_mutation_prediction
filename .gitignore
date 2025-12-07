@@ -13,9 +13,6 @@ env/
 # Notebook checkpoints
 .ipynb_checkpoints/
 
-# Notebooks (exclude from version control)
-notebooks/data_exploration.ipynb
-
 # Editor settings
 .vscode/
 .idea/
