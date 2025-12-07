@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
@@ -100,4 +102,318 @@ def evaluate_multilabel(y_true, y_pred, y_prob, mutation_names):
         results[mutation] = gene_metrics
     
     return pd.DataFrame(results).T
+
+
+def extract_cancer_types(
+    X: pd.DataFrame | None = None,
+    sample_to_cancer: dict[str, str] | None = None,
+    sample_ids: list[str] | pd.Index | None = None,
+) -> tuple[pd.Series, list[str]]:
+    """
+    Extract cancer type information from expression DataFrame or mapping dictionary.
+    
+    Args:
+        X: Expression DataFrame with cancer_* columns or index matching samples
+        sample_to_cancer: Optional dictionary mapping sample IDs to cancer types
+        sample_ids: Optional list of sample IDs to create mapping for
+    
+    Returns:
+        Tuple of (cancer_type_series, cancer_type_names)
+    """
+    # If mapping provided, use it
+    if sample_to_cancer is not None:
+        if sample_ids is not None:
+            index = pd.Index(sample_ids)
+        elif X is not None:
+            index = X.index
+        else:
+            raise ValueError("Either X or sample_ids must be provided when using sample_to_cancer")
+        
+        cancer_type_series = pd.Series('unknown', index=index)
+        for sample_id in index:
+            if sample_id in sample_to_cancer:
+                cancer_type_series[sample_id] = sample_to_cancer[sample_id]
+        cancer_type_names = sorted([ct for ct in cancer_type_series.unique() if ct != 'unknown'])
+        return cancer_type_series, cancer_type_names
+    
+    # Fallback: try to extract from cancer_* columns in X
+    if X is not None:
+        cancer_cols = [col for col in X.columns if col.startswith('cancer_')]
+        if cancer_cols:
+            cancer_type_series = pd.Series('unknown', index=X.index)
+            for cancer_col in cancer_cols:
+                samples_with_cancer = X.index[X[cancer_col] == 1]
+                cancer_type_name = cancer_col.replace('cancer_', '')
+                cancer_type_series[samples_with_cancer] = cancer_type_name
+            cancer_type_names = sorted([ct for ct in cancer_type_series.unique() if ct != 'unknown'])
+            return cancer_type_series, cancer_type_names
+    
+    return pd.Series(dtype=object), []
+
+
+def compute_per_cancer_metrics(
+    y_true: pd.DataFrame,
+    y_pred: pd.DataFrame,
+    y_prob: pd.DataFrame,
+    X: pd.DataFrame | None = None,
+    sample_to_cancer: dict[str, str] | None = None,
+) -> dict[str, pd.DataFrame]:
+    """
+    Compute per-cancer-type metrics from predictions and probabilities.
+    
+    Args:
+        y_true: True labels DataFrame (samples x genes)
+        y_pred: Predicted labels DataFrame (samples x genes)
+        y_prob: Predicted probabilities DataFrame (samples x genes)
+        X: Optional expression DataFrame with cancer_* columns or matching index
+        sample_to_cancer: Optional dictionary mapping sample IDs to cancer types
+    
+    Returns:
+        Dictionary mapping cancer type names to metric DataFrames
+        {cancer_type: DataFrame with genes as rows and metrics as columns}
+    """
+    # Extract cancer types
+    cancer_type_series, cancer_type_names = extract_cancer_types(
+        X=X,
+        sample_to_cancer=sample_to_cancer,
+        sample_ids=y_true.index.tolist(),
+    )
+    
+    if not cancer_type_names:
+        raise ValueError(
+            "No cancer types found. Provide either X DataFrame with cancer_* columns "
+            "or sample_to_cancer dictionary."
+        )
+    
+    # Ensure all DataFrames have aligned indices
+    common_index = y_true.index.intersection(y_pred.index).intersection(y_prob.index)
+    if len(common_index) == 0:
+        raise ValueError("No common sample IDs found between y_true, y_pred, and y_prob")
+    
+    y_true = y_true.loc[common_index]
+    y_pred = y_pred.loc[common_index]
+    y_prob = y_prob.loc[common_index]
+    
+    # Align cancer type series with common index
+    cancer_type_series = cancer_type_series.loc[common_index]
+    
+    gene_names = y_true.columns.tolist()
+    results = {}
+    
+    print(f"\nComputing per-cancer-type metrics...")
+    print(f"   Cancer types: {cancer_type_names}")
+    print(f"   Total samples: {len(common_index)}")
+    print(f"   Genes: {len(gene_names)}")
+    
+    for cancer_type in cancer_type_names:
+        # Get samples for this cancer type
+        cancer_samples = cancer_type_series[cancer_type_series == cancer_type].index
+        
+        if len(cancer_samples) == 0:
+            print(f"   Warning: No samples found for {cancer_type}. Skipping...")
+            continue
+        
+        # Filter data to this cancer type
+        y_true_ct = y_true.loc[cancer_samples]
+        y_pred_ct = y_pred.loc[cancer_samples]
+        y_prob_ct = y_prob.loc[cancer_samples]
+        
+        # Ensure all samples exist in all dataframes
+        valid_samples = y_true_ct.index.intersection(y_pred_ct.index).intersection(y_prob_ct.index)
+        if len(valid_samples) == 0:
+            print(f"   Warning: No valid samples after alignment for {cancer_type}. Skipping...")
+            continue
+        
+        y_true_ct = y_true_ct.loc[valid_samples]
+        y_pred_ct = y_pred_ct.loc[valid_samples]
+        y_prob_ct = y_prob_ct.loc[valid_samples]
+        
+        # Compute metrics for this cancer type
+        metrics_df = evaluate_multilabel(
+            y_true=y_true_ct.values,
+            y_pred=y_pred_ct.values,
+            y_prob=y_prob_ct.values,
+            mutation_names=gene_names,
+        )
+        
+        results[cancer_type] = metrics_df
+        print(f"   {cancer_type}: {len(valid_samples)} samples")
+    
+    return results
+
+
+def compute_per_cancer_metrics_from_files(
+    predictions_path: str | Path,
+    probabilities_path: str | Path,
+    y_true: pd.DataFrame,
+    X: pd.DataFrame | None = None,
+    sample_to_cancer: dict[str, str] | None = None,
+    output_dir: str | Path | None = None,
+) -> dict[str, pd.DataFrame]:
+    """
+    Compute per-cancer-type metrics from saved prediction and probability files.
+    
+    This function loads predictions and probabilities from CSV files and computes
+    per-cancer-type metrics.
+    
+    Args:
+        predictions_path: Path to predictions CSV file (samples x genes)
+        probabilities_path: Path to probabilities CSV file (samples x genes)
+        y_true: True labels DataFrame (samples x genes)
+        X: Optional expression DataFrame with cancer_* columns or matching index
+        sample_to_cancer: Optional dictionary mapping sample IDs to cancer types
+        output_dir: Optional directory to save per-cancer metrics CSV files
+    
+    Returns:
+        Dictionary mapping cancer type names to metric DataFrames
+    """
+    predictions_path = Path(predictions_path)
+    probabilities_path = Path(probabilities_path)
+    
+    if not predictions_path.exists():
+        raise FileNotFoundError(f"Predictions file not found: {predictions_path}")
+    if not probabilities_path.exists():
+        raise FileNotFoundError(f"Probabilities file not found: {probabilities_path}")
+    
+    # Load predictions and probabilities
+    print(f"Loading predictions from: {predictions_path}")
+    y_pred = pd.read_csv(predictions_path, index_col=0)
+    
+    print(f"Loading probabilities from: {probabilities_path}")
+    y_prob = pd.read_csv(probabilities_path, index_col=0)
+    
+    # Compute per-cancer metrics
+    results = compute_per_cancer_metrics(
+        y_true=y_true,
+        y_pred=y_pred,
+        y_prob=y_prob,
+        X=X,
+        sample_to_cancer=sample_to_cancer,
+    )
+    
+    # Save results if output directory provided
+    if output_dir is not None:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        print(f"\nSaving per-cancer metrics to: {output_dir}")
+        for cancer_type, metrics_df in results.items():
+            cancer_dir = output_dir / "cancer_type" / cancer_type
+            cancer_dir.mkdir(parents=True, exist_ok=True)
+            
+            csv_path = cancer_dir / "metrics.csv"
+            metrics_df.to_csv(csv_path)
+            print(f"   Saved {cancer_type} metrics: {csv_path}")
+    
+    return results
+
+
+def compute_per_cancer_metrics_kfold(
+    kfold_dir: str | Path,
+    y_true: pd.DataFrame,
+    X: pd.DataFrame | None = None,
+    sample_to_cancer: dict[str, str] | None = None,
+    output_dir: str | Path | None = None,
+) -> dict[str, pd.DataFrame]:
+    """
+    Compute per-cancer-type metrics from k-fold cross-validation results.
+    
+    This function processes k-fold results and computes per-cancer metrics,
+    optionally aggregating across folds.
+    
+    Args:
+        kfold_dir: Directory containing fold_*/ subdirectories with predictions.csv and probabilities.csv
+        y_true: True labels DataFrame (samples x genes)
+        X: Optional expression DataFrame with cancer_* columns or matching index
+        sample_to_cancer: Optional dictionary mapping sample IDs to cancer types
+        output_dir: Optional directory to save per-cancer metrics (aggregated across folds)
+    
+    Returns:
+        Dictionary mapping cancer type names to metric DataFrames
+        (aggregated mean and std across folds)
+    """
+    kfold_dir = Path(kfold_dir)
+    
+    if not kfold_dir.exists():
+        raise FileNotFoundError(f"K-fold directory not found: {kfold_dir}")
+    
+    # Find all fold directories
+    fold_dirs = sorted([d for d in kfold_dir.iterdir() if d.is_dir() and d.name.startswith('fold_')])
+    
+    if len(fold_dirs) == 0:
+        raise ValueError(f"No fold directories found in {kfold_dir}")
+    
+    print(f"Processing {len(fold_dirs)} folds from: {kfold_dir}")
+    
+    all_fold_results = []
+    
+    for fold_dir in fold_dirs:
+        fold_num = fold_dir.name.replace('fold_', '')
+        predictions_path = fold_dir / "predictions.csv"
+        probabilities_path = fold_dir / "probabilities.csv"
+        
+        if not predictions_path.exists() or not probabilities_path.exists():
+            print(f"   Warning: Missing files in {fold_dir}. Skipping...")
+            continue
+        
+        print(f"\n   Processing {fold_dir.name}...")
+        
+        try:
+            fold_results = compute_per_cancer_metrics_from_files(
+                predictions_path=predictions_path,
+                probabilities_path=probabilities_path,
+                y_true=y_true,
+                X=X,
+                sample_to_cancer=sample_to_cancer,
+            )
+            
+            # Add fold number to results
+            for cancer_type, metrics_df in fold_results.items():
+                metrics_df['fold'] = fold_num
+                all_fold_results.append((cancer_type, metrics_df))
+        
+        except Exception as e:
+            print(f"   Warning: Failed to process {fold_dir.name}: {e}")
+            continue
+    
+    if len(all_fold_results) == 0:
+        raise ValueError("No valid fold results found")
+    
+    # Aggregate results across folds by cancer type
+    print(f"\nAggregating results across {len(fold_dirs)} folds...")
+    aggregated_results = {}
+    
+    cancer_types = set(cancer_type for cancer_type, _ in all_fold_results)
+    
+    for cancer_type in sorted(cancer_types):
+        fold_metrics = [df for ct, df in all_fold_results if ct == cancer_type]
+        
+        if len(fold_metrics) == 0:
+            continue
+        
+        # Combine all folds
+        combined = pd.concat(fold_metrics, keys=range(len(fold_metrics)))
+        
+        # Group by gene and compute mean and std
+        summary = combined.groupby(level=1).agg(['mean', 'std'])
+        summary.columns = ["_".join(col).strip() for col in summary.columns.values]
+        
+        aggregated_results[cancer_type] = summary
+        print(f"   {cancer_type}: aggregated {len(fold_metrics)} folds")
+    
+    # Save aggregated results if output directory provided
+    if output_dir is not None:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        print(f"\nSaving aggregated per-cancer metrics to: {output_dir}")
+        for cancer_type, metrics_df in aggregated_results.items():
+            cancer_dir = output_dir / "cancer_type" / cancer_type
+            cancer_dir.mkdir(parents=True, exist_ok=True)
+            
+            csv_path = cancer_dir / "metrics_aggregated.csv"
+            metrics_df.to_csv(csv_path)
+            print(f"   Saved {cancer_type} aggregated metrics: {csv_path}")
+    
+    return aggregated_results
 

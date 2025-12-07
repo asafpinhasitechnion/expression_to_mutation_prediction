@@ -820,7 +820,8 @@ class ModelFactory:
 
     def get_model(self, model_name: str, input_size: int, output_size: int, config: dict | None = None):
         config = config or {}
-        model_config = config.get('model', {}).get(model_name, {})
+        model_section = config.get('model', {}) or {}
+        model_config = model_section.get(model_name) or {}
 
         if model_name in self._model_registry:
             model_cls = self._model_registry[model_name]

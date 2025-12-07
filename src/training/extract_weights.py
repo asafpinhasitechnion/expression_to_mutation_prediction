@@ -21,6 +21,7 @@ def train_and_extract_head_weights(
     hidden_layers: list[int] = [2048, 1536, 1024],
     head_layers: list[int] | None = None,
     output_dir: str | Path | None = None,
+    save_model: bool = False,
 ) -> Dict[str, torch.Tensor]:
     """
     Train a multitask neural network on the full dataset and extract head layer weights.
@@ -32,7 +33,8 @@ def train_and_extract_head_weights(
         config: Configuration dictionary
         hidden_layers: List of hidden layer sizes for the encoder
         head_layers: List of head layer sizes (None or [] for simple linear output)
-        output_dir: Optional directory to save the model
+        output_dir: Optional directory to save weights and metadata
+        save_model: Whether to save model checkpoint (default: False)
     
     Returns:
         Dictionary mapping gene names to their head weight vectors (tensors of shape (hidden_size,))
@@ -86,11 +88,14 @@ def train_and_extract_head_weights(
     gene_weights["gene_names"] = mutation_names
     gene_weights["weight_matrix_shape"] = head_weight_matrix.shape
     
-    # Save model if output_dir is provided
+    # Save weights and metadata if output_dir is provided
     if output_dir is not None:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        model.save(output_dir)
+        
+        # Save model only if requested
+        if save_model:
+            model.save(output_dir)
         
         # Save head weights as numpy array
         np.save(output_dir / "head_weights.npy", head_weights_np)
@@ -99,9 +104,12 @@ def train_and_extract_head_weights(
         with open(output_dir / "gene_names.json", "w") as f:
             json.dump(mutation_names, f, indent=2)
         
-        print(f"   Model and weights saved to: {output_dir}")
+        if save_model:
+            print(f"   Model and weights saved to: {output_dir}")
+        else:
+            print(f"   Weights saved to: {output_dir}")
     
-    print("✅ Training complete!")
+    print("Training complete!")
     print(f"   Head weight matrix shape: {head_weight_matrix.shape}")
     
     return gene_weights

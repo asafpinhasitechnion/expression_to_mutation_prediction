@@ -29,7 +29,7 @@ features:
 
 # Model parameters
 model:
-  name: "random_forest"  # Options: random_forest, xgboost, neural_net, multitask_nn
+  name: "lightgbm"  # Options: random_forest, xgboost, neural_net, multitask_nn
   random_forest:
     n_estimators: 100
     max_depth: 10
@@ -39,6 +39,7 @@ model:
     n_estimators: 100
     max_depth: 6
     learning_rate: 0.1
+  lightgbm:
   neural_net:
     hidden_layers: [256, 128, 64]
     dropout_rate: 0.3

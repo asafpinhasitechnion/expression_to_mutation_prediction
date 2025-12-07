@@ -80,7 +80,7 @@ def main(
             output_dir=output_dir,
         )
         
-        print(f"\n✅ Head weights extracted!")
+        print(f"\nHead weights extracted!")
         print(f"   Weight matrix shape: {head_weights['weight_matrix_shape']}")
         print(f"   Number of genes: {len(head_weights['gene_names'])}")
         print(f"   Results saved to: {output_dir}")

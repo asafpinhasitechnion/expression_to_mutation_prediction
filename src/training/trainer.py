@@ -23,8 +23,25 @@ def run_train_test_split(
     config_meta: Dict | None = None,
     random_state: int | None = 42,
     label: str | None = None,
+    save_model: bool = False,
 ):
-    """Train on a subset of the data and evaluate on a held-out test set."""
+    """
+    Train on a subset of the data and evaluate on a held-out test set.
+    
+    Args:
+        model: Model instance to train
+        X: Input features
+        Y: Target labels
+        test_size: Proportion of data for testing
+        output_dir: Directory to save results
+        config_meta: Optional metadata to save
+        random_state: Random seed for train/test split
+        label: Optional label for the model
+        save_model: Whether to save model checkpoint (default: False)
+    
+    Returns:
+        DataFrame with per-gene metrics
+    """
     mutation_names = (
         Y.columns if isinstance(Y, pd.DataFrame) else [f"mutation_{i}" for i in range(Y.shape[1])]
     )
@@ -73,9 +90,10 @@ def run_train_test_split(
         with open(output_dir / "meta.json", "w") as f:
             json.dump(config_meta, f, indent=2)
 
-    model.save(output_dir)
+    if save_model:
+        model.save(output_dir)
 
-    print("✅ Train/test evaluation complete.")
+    print("Train/test evaluation complete.")
     print(summary)
     return metrics
 
@@ -89,8 +107,25 @@ def run_kfold_training(
     config_meta: Dict | None = None,
     random_state: int | None = 42,
     label: str | None = None,
+    save_models: bool = False,
 ):
-    """K-fold cross-validation with per-fold artifacts."""
+    """
+    K-fold cross-validation with per-fold artifacts.
+    
+    Args:
+        model: Model instance to train
+        X: Input features
+        Y: Target labels
+        k: Number of folds
+        output_dir: Directory to save results
+        config_meta: Optional metadata to save
+        random_state: Random seed for CV splits
+        label: Optional label for the model
+        save_models: Whether to save model checkpoints (default: False)
+    
+    Returns:
+        DataFrame with aggregated metrics (mean and std across folds)
+    """
     mutation_names = (
         Y.columns if isinstance(Y, pd.DataFrame) else [f"mutation_{i}" for i in range(Y.shape[1])]
     )
@@ -108,7 +143,7 @@ def run_kfold_training(
     fold_metrics = []
 
     for fold, (train_idx, test_idx) in enumerate(kf.split(X_values), start=1):
-        print(f"\n🔁 Fold {fold}/{k}...")
+        print(f"\nFold {fold}/{k}...")
 
         model_fold = copy.deepcopy(model)
 
@@ -131,7 +166,8 @@ def run_kfold_training(
         preds_df.to_csv(fold_dir / "predictions.csv")
         probs_df.to_csv(fold_dir / "probabilities.csv")
 
-        model_fold.save(fold_dir)
+        if save_models:
+            model_fold.save(fold_dir)
 
     stacked = pd.concat(fold_metrics)
     summary = stacked.groupby(level=0).agg(['mean', 'std'])
@@ -142,6 +178,6 @@ def run_kfold_training(
         with open(output_dir / "meta.json", "w") as f:
             json.dump(config_meta, f, indent=2)
 
-    print("✅ K-fold evaluation complete.")
+    print("K-fold evaluation complete.")
     return summary
 
