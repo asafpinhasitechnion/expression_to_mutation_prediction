@@ -17,9 +17,13 @@ env/
 .vscode/
 .idea/
 
+config/
+config/config.yaml
+
 # Large artifacts
 cache/
 results/
+Data/
 *.log
 
 # OS junk

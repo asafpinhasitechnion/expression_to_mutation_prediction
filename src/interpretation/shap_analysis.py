@@ -223,7 +223,7 @@ def compute_shap_for_all_genes(
         except Exception as e:
             print(f"     Failed for {gene_name}: {e}")
             continue
-    
+
     print(f"\nSHAP computation complete for {len(results)} genes")
     return results
 
@@ -320,7 +320,7 @@ def compute_shap_per_cancer_type(
             X_explain_ct = X_explain[cancer_indices]
         
         if len(X_explain_ct) == 0:
-                print(f"   No samples found for {cancer_type}. Skipping...")
+            print(f"   No samples found for {cancer_type}. Skipping...")
             continue
         
         print(f"   Samples: {len(X_explain_ct)}")

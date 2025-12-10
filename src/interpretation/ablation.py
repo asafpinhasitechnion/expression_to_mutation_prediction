@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import KFold, train_test_split
 
-from evaluation.metrics import evaluate_multilabel
+from evaluation.metrics import combine_dataframe_folds, evaluate_multilabel
 from models.model_factory import ModelFactory
 
 # Import visualization functions (optional - only if available)
@@ -455,45 +455,64 @@ def run_gene_ablation_analysis(
         combined_dir = output_dir / "combined_predictions"
         combined_dir.mkdir(exist_ok=True)
         
-        # Combine baseline predictions
-        baseline_preds_list = []
-        baseline_probs_list = []
-        for fold_idx in sorted(fold_predictions.keys()):
-            fold_data = fold_predictions[fold_idx]['baseline']
-            preds_df = fold_data['predictions'].copy()
-            probs_df = fold_data['probabilities'].copy()
-            preds_df['fold'] = fold_idx
-            probs_df['fold'] = fold_idx
-            baseline_preds_list.append(preds_df)
-            baseline_probs_list.append(probs_df)
+        # Combine baseline predictions using shared utility
+        sorted_fold_indices = sorted(fold_predictions.keys())
+        baseline_preds_list = [fold_predictions[idx]['baseline']['predictions'] for idx in sorted_fold_indices]
+        baseline_probs_list = [fold_predictions[idx]['baseline']['probabilities'] for idx in sorted_fold_indices]
         
-        combined_baseline_preds = pd.concat(baseline_preds_list, axis=0)
-        combined_baseline_probs = pd.concat(baseline_probs_list, axis=0)
-        combined_baseline_preds.to_csv(combined_dir / "baseline_predictions.csv")
-        combined_baseline_probs.to_csv(combined_dir / "baseline_probabilities.csv")
+        combined_baseline_preds = combine_dataframe_folds(
+            dataframes=baseline_preds_list,
+            fold_numbers=sorted_fold_indices,
+            include_fold_info=True
+        )
+        combined_baseline_probs = combine_dataframe_folds(
+            dataframes=baseline_probs_list,
+            fold_numbers=sorted_fold_indices,
+            include_fold_info=True
+        )
+        
+        # Save without fold column for cleaner usage
+        combined_baseline_preds.drop(columns=['fold'], errors='ignore').to_csv(
+            combined_dir / "baseline_predictions.csv"
+        )
+        combined_baseline_probs.drop(columns=['fold'], errors='ignore').to_csv(
+            combined_dir / "baseline_probabilities.csv"
+        )
         print(f"   Baseline predictions combined ({len(combined_baseline_preds)} samples)")
         
-        # Combine ablation predictions for each gene
+        # Combine ablation predictions for each gene using shared utility
         for removed_gene in mutation_names:
             ablation_preds_list = []
             ablation_probs_list = []
+            fold_indices = []
+            
             for fold_idx in sorted(fold_predictions.keys()):
                 if removed_gene in fold_predictions[fold_idx]['ablation']:
-                    fold_data = fold_predictions[fold_idx]['ablation'][removed_gene]
-                    preds_df = fold_data['predictions'].copy()
-                    probs_df = fold_data['probabilities'].copy()
-                    preds_df['fold'] = fold_idx
-                    probs_df['fold'] = fold_idx
-                    ablation_preds_list.append(preds_df)
-                    ablation_probs_list.append(probs_df)
+                    ablation_preds_list.append(fold_predictions[fold_idx]['ablation'][removed_gene]['predictions'])
+                    ablation_probs_list.append(fold_predictions[fold_idx]['ablation'][removed_gene]['probabilities'])
+                    fold_indices.append(fold_idx)
             
             if ablation_preds_list:
-                combined_ablation_preds = pd.concat(ablation_preds_list, axis=0)
-                combined_ablation_probs = pd.concat(ablation_probs_list, axis=0)
+                combined_ablation_preds = combine_dataframe_folds(
+                    dataframes=ablation_preds_list,
+                    fold_numbers=fold_indices,
+                    include_fold_info=True
+                )
+                combined_ablation_probs = combine_dataframe_folds(
+                    dataframes=ablation_probs_list,
+                    fold_numbers=fold_indices,
+                    include_fold_info=True
+                )
+                
                 gene_dir = combined_dir / removed_gene
                 gene_dir.mkdir(exist_ok=True)
-                combined_ablation_preds.to_csv(gene_dir / "predictions.csv")
-                combined_ablation_probs.to_csv(gene_dir / "probabilities.csv")
+                # Save without fold column for cleaner usage
+                combined_ablation_preds.drop(columns=['fold'], errors='ignore').to_csv(
+                    gene_dir / "predictions.csv"
+                )
+                combined_ablation_probs.drop(columns=['fold'], errors='ignore').to_csv(
+                    gene_dir / "probabilities.csv"
+                )
         
         print(f"   Ablation predictions combined for {len(mutation_names)} genes")
         print(f"   Combined predictions saved to: {combined_dir}")

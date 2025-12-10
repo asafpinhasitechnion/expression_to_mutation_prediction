@@ -417,3 +417,139 @@ def compute_per_cancer_metrics_kfold(
     
     return aggregated_results
 
+
+def combine_dataframe_folds(
+    dataframes: list[pd.DataFrame],
+    fold_numbers: list[int | str] | None = None,
+    include_fold_info: bool = True,
+) -> pd.DataFrame:
+    """
+    Combine DataFrames from multiple folds into a single DataFrame.
+    
+    Helper function for combining predictions/probabilities that are already in memory.
+    Useful for ablation analysis and other cases where DataFrames are constructed in-memory.
+    
+    Args:
+        dataframes: List of DataFrames to combine (one per fold)
+        fold_numbers: Optional list of fold numbers/identifiers (default: 1, 2, 3, ...)
+        include_fold_info: Whether to add a 'fold' column to the combined DataFrame
+    
+    Returns:
+        Combined DataFrame with all samples from all folds
+    """
+    if len(dataframes) == 0:
+        raise ValueError("No DataFrames provided to combine")
+    
+    if fold_numbers is None:
+        fold_numbers = list(range(1, len(dataframes) + 1))
+    
+    if len(fold_numbers) != len(dataframes):
+        raise ValueError(f"Mismatch: {len(dataframes)} DataFrames but {len(fold_numbers)} fold numbers")
+    
+    combined_list = []
+    for df, fold_num in zip(dataframes, fold_numbers):
+        df_copy = df.copy()
+        if include_fold_info:
+            df_copy['fold'] = fold_num
+        combined_list.append(df_copy)
+    
+    combined = pd.concat(combined_list, axis=0)
+    return combined
+
+
+def combine_fold_predictions(
+    kfold_dir: str | Path,
+    output_dir: str | Path | None = None,
+    include_fold_info: bool = True,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Combine predictions and probabilities from k-fold cross-validation results.
+    
+    This utility function reads predictions from all fold directories and combines
+    them into a single DataFrame for each type (predictions and probabilities).
+    
+    Args:
+        kfold_dir: Directory containing fold_*/ subdirectories with predictions.csv and probabilities.csv
+        output_dir: Optional directory to save combined predictions
+                   If provided, saves to output_dir / "combined_predictions"
+        include_fold_info: Whether to include fold information in output files (default: True)
+    
+    Returns:
+        Tuple of (combined_predictions_df, combined_probabilities_df)
+        Both DataFrames have all samples from all folds, with optional 'fold' column
+    """
+    kfold_dir = Path(kfold_dir)
+    
+    if not kfold_dir.exists():
+        raise FileNotFoundError(f"K-fold directory not found: {kfold_dir}")
+    
+    # Find all fold directories
+    fold_dirs = sorted([d for d in kfold_dir.iterdir() if d.is_dir() and d.name.startswith('fold_')])
+    
+    if len(fold_dirs) == 0:
+        raise ValueError(f"No fold directories found in {kfold_dir}")
+    
+    print(f"Combining predictions from {len(fold_dirs)} folds...")
+    
+    combined_preds_list = []
+    combined_probs_list = []
+    
+    for fold_dir in fold_dirs:
+        preds_path = fold_dir / "predictions.csv"
+        probs_path = fold_dir / "probabilities.csv"
+        
+        if not preds_path.exists() or not probs_path.exists():
+            print(f"   Warning: Missing files in {fold_dir}. Skipping...")
+            continue
+        
+        preds_df = pd.read_csv(preds_path, index_col=0)
+        probs_df = pd.read_csv(probs_path, index_col=0)
+        
+        # Extract fold number from directory name
+        fold_num = fold_dir.name.replace('fold_', '')
+        try:
+            fold_num = int(fold_num)
+        except ValueError:
+            # If not numeric, keep as string
+            pass
+        
+        # Add fold information if requested
+        if include_fold_info:
+            preds_df = preds_df.copy()
+            probs_df = probs_df.copy()
+            preds_df['fold'] = fold_num
+            probs_df['fold'] = fold_num
+        
+        combined_preds_list.append(preds_df)
+        combined_probs_list.append(probs_df)
+    
+    if len(combined_preds_list) == 0:
+        raise ValueError("No valid fold predictions found to combine")
+    
+    # Combine all folds
+    combined_preds = pd.concat(combined_preds_list, axis=0)
+    combined_probs = pd.concat(combined_probs_list, axis=0)
+    
+    print(f"   Combined {len(combined_preds)} samples from {len(combined_preds_list)} folds")
+    
+    # Save if output directory provided
+    if output_dir is not None:
+        output_dir = Path(output_dir)
+        combined_dir = output_dir / "combined_predictions"
+        combined_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Save versions without fold column for cleaner usage
+        combined_preds_clean = combined_preds.drop(columns=['fold'], errors='ignore')
+        combined_probs_clean = combined_probs.drop(columns=['fold'], errors='ignore')
+        
+        combined_preds_clean.to_csv(combined_dir / "predictions.csv")
+        combined_probs_clean.to_csv(combined_dir / "probabilities.csv")
+        
+        # Also save with fold information if requested
+        if include_fold_info:
+            combined_preds.to_csv(combined_dir / "predictions_with_fold.csv")
+            combined_probs.to_csv(combined_dir / "probabilities_with_fold.csv")
+        
+        print(f"   Saved to: {combined_dir}")
+    
+    return combined_preds, combined_probs

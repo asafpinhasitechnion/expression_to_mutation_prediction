@@ -565,7 +565,6 @@ class MultitaskMutationModel(BaseModel):
             mode='min',
             factor=0.5,
             patience=max(1, self.patience // 3),
-            verbose=False
         )
 
         best_val = float('inf')

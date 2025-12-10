@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import KFold, train_test_split
 
-from evaluation.metrics import evaluate_multilabel
+from evaluation.metrics import combine_fold_predictions, evaluate_multilabel
 
 
 def run_train_test_split(
@@ -173,6 +173,13 @@ def run_kfold_training(
     summary = stacked.groupby(level=0).agg(['mean', 'std'])
     summary.columns = ["_".join(col).strip() for col in summary.columns]
     summary.to_csv(output_dir / "summary.csv")
+
+    # Combine predictions and probabilities from all folds using shared utility
+    combine_fold_predictions(
+        kfold_dir=output_dir,
+        output_dir=output_dir,
+        include_fold_info=True,
+    )
 
     if config_meta:
         with open(output_dir / "meta.json", "w") as f:
