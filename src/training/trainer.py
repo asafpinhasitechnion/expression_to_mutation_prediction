@@ -178,8 +178,22 @@ def run_kfold_training(
     combine_fold_predictions(
         kfold_dir=output_dir,
         output_dir=output_dir,
-        include_fold_info=True,
     )
+
+    # Automatically compute overall metrics from combined predictions
+    if isinstance(Y, pd.DataFrame):
+        from evaluation.metrics import compute_metrics_from_combined
+        try:
+            combined_predictions_dir = output_dir / "combined_predictions"
+            if combined_predictions_dir.exists():
+                print("\nComputing overall metrics from combined predictions...")
+                compute_metrics_from_combined(
+                    combined_predictions_dir=combined_predictions_dir,
+                    y_true=Y,
+                    output_dir=output_dir / "metrics",
+                )
+        except Exception as e:
+            print(f"Warning: Could not compute metrics from combined predictions: {e}")
 
     if config_meta:
         with open(output_dir / "meta.json", "w") as f:

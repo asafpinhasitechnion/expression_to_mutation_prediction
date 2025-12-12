@@ -8,6 +8,7 @@ try:
         compute_shap_values_for_gene,
         compute_shap_for_all_genes,
         compute_shap_per_cancer_type,
+        save_shap_summary,
     )
     SHAP_AVAILABLE = True
 except ImportError:
@@ -35,6 +36,7 @@ if SHAP_AVAILABLE:
         "compute_shap_values_for_gene",
         "compute_shap_for_all_genes",
         "compute_shap_per_cancer_type",
+        "save_shap_summary",
     ])
 
 if FEATURE_IMPORTANCE_AVAILABLE:

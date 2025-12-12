@@ -463,12 +463,10 @@ def run_gene_ablation_analysis(
         combined_baseline_preds = combine_dataframe_folds(
             dataframes=baseline_preds_list,
             fold_numbers=sorted_fold_indices,
-            include_fold_info=True
         )
         combined_baseline_probs = combine_dataframe_folds(
             dataframes=baseline_probs_list,
             fold_numbers=sorted_fold_indices,
-            include_fold_info=True
         )
         
         # Save without fold column for cleaner usage
@@ -496,12 +494,10 @@ def run_gene_ablation_analysis(
                 combined_ablation_preds = combine_dataframe_folds(
                     dataframes=ablation_preds_list,
                     fold_numbers=fold_indices,
-                    include_fold_info=True
                 )
                 combined_ablation_probs = combine_dataframe_folds(
                     dataframes=ablation_probs_list,
                     fold_numbers=fold_indices,
-                    include_fold_info=True
                 )
                 
                 gene_dir = combined_dir / removed_gene

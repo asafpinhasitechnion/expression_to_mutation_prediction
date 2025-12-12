@@ -30,6 +30,7 @@ def evaluate_multilabel(y_true, y_pred, y_prob, mutation_names):
     - recall: Recall score (sensitivity)
     - specificity: Specificity (true negative rate)
     - mcc: Matthews Correlation Coefficient
+    - prevalence: Proportion of samples with mutation (y_true == 1)
     
     Args:
         y_true: True labels, shape (n_samples, n_genes)
@@ -99,6 +100,13 @@ def evaluate_multilabel(y_true, y_pred, y_prob, mutation_names):
         except ValueError:
             gene_metrics['mcc'] = None
         
+        # Prevalence: proportion of samples with mutation
+        n_samples = len(y_true_gene)
+        if n_samples > 0:
+            gene_metrics['prevalence'] = np.sum(y_true_gene == 1) / n_samples
+        else:
+            gene_metrics['prevalence'] = None
+        
         results[mutation] = gene_metrics
     
     return pd.DataFrame(results).T
@@ -149,6 +157,65 @@ def extract_cancer_types(
             return cancer_type_series, cancer_type_names
     
     return pd.Series(dtype=object), []
+
+
+def _load_and_align_predictions(
+    predictions_path: str | Path,
+    probabilities_path: str | Path,
+    y_true: pd.DataFrame,
+    drop_fold_column: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+    """
+    Helper function to load predictions and probabilities, align with y_true,
+    and optionally drop 'fold' column.
+    
+    Args:
+        predictions_path: Path to predictions CSV file
+        probabilities_path: Path to probabilities CSV file
+        y_true: True labels DataFrame (samples x genes)
+        drop_fold_column: Whether to drop 'fold' column if present
+    
+    Returns:
+        Tuple of (aligned_y_pred, aligned_y_prob, gene_names)
+    """
+    predictions_path = Path(predictions_path)
+    probabilities_path = Path(probabilities_path)
+    
+    if not predictions_path.exists():
+        raise FileNotFoundError(f"Predictions file not found: {predictions_path}")
+    if not probabilities_path.exists():
+        raise FileNotFoundError(f"Probabilities file not found: {probabilities_path}")
+    
+    # Load predictions and probabilities
+    y_pred = pd.read_csv(predictions_path, index_col=0)
+    y_prob = pd.read_csv(probabilities_path, index_col=0)
+    
+    # Drop 'fold' column if present and requested
+    if drop_fold_column:
+        if 'fold' in y_pred.columns:
+            y_pred = y_pred.drop(columns=['fold'])
+        if 'fold' in y_prob.columns:
+            y_prob = y_prob.drop(columns=['fold'])
+    
+    # Align indices
+    common_index = y_true.index.intersection(y_pred.index).intersection(y_prob.index)
+    if len(common_index) == 0:
+        raise ValueError("No common sample IDs found between y_true, y_pred, and y_prob")
+    
+    y_true_aligned = y_true.loc[common_index]
+    y_pred = y_pred.loc[common_index]
+    y_prob = y_prob.loc[common_index]
+    
+    # Ensure columns match
+    common_genes = y_true_aligned.columns.intersection(y_pred.columns).intersection(y_prob.columns)
+    if len(common_genes) == 0:
+        raise ValueError("No common gene columns found between y_true, y_pred, and y_prob")
+    
+    y_pred = y_pred[common_genes]
+    y_prob = y_prob[common_genes]
+    gene_names = common_genes.tolist()
+    
+    return y_pred, y_prob, gene_names
 
 
 def compute_per_cancer_metrics(
@@ -205,6 +272,17 @@ def compute_per_cancer_metrics(
     print(f"   Total samples: {len(common_index)}")
     print(f"   Genes: {len(gene_names)}")
     
+    # Compute overall metrics (including overall prevalence)
+    print(f"\n   Computing overall metrics...")
+    overall_metrics = evaluate_multilabel(
+        y_true=y_true.values,
+        y_pred=y_pred.values,
+        y_prob=y_prob.values,
+        mutation_names=gene_names,
+    )
+    results['overall'] = overall_metrics
+    print(f"   Overall: {len(common_index)} samples")
+    
     for cancer_type in cancer_type_names:
         # Get samples for this cancer type
         cancer_samples = cancer_type_series[cancer_type_series == cancer_type].index
@@ -242,6 +320,67 @@ def compute_per_cancer_metrics(
     return results
 
 
+def _save_metrics_results(
+    results: dict[str, pd.DataFrame] | pd.DataFrame,
+    output_dir: Path,
+    per_cancer: bool = True,
+    create_summary_files: bool = False,
+) -> None:
+    """
+    Helper function to save metrics results.
+    
+    Args:
+        results: Either a dict mapping cancer types to DataFrames, or a single DataFrame
+        output_dir: Directory to save results
+        per_cancer: If True, results is a dict and should be saved per cancer type
+        create_summary_files: If True and per_cancer, create summary files per metric
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    if per_cancer:
+        # Results is a dict: {cancer_type: DataFrame}
+        if len(results) == 0:
+            print("Warning: No results to save")
+            return
+        
+        # Create summary files if requested
+        if create_summary_files:
+            first_cancer_type = list(results.keys())[0]
+            metrics_list = results[first_cancer_type].columns.tolist()
+            cancer_types = sorted(results.keys())
+            
+            print(f"\nSummarizing metrics per cancer type...")
+            print(f"   Metrics: {metrics_list}")
+            print(f"   Cancer types: {cancer_types}")
+            
+            for metric in metrics_list:
+                summary_data = {}
+                for cancer_type in cancer_types:
+                    metrics_df = results[cancer_type]
+                    if metric in metrics_df.columns:
+                        summary_data[cancer_type] = metrics_df[metric]
+                
+                if summary_data:
+                    summary_df = pd.DataFrame(summary_data)
+                    csv_path = output_dir / f"{metric}_per_cancer.csv"
+                    summary_df.to_csv(csv_path)
+                    print(f"   Saved {metric} summary: {csv_path}")
+        
+        # Save individual per-cancer metrics
+        print(f"\nSaving per-cancer metrics to: {output_dir}")
+        for cancer_type, metrics_df in results.items():
+            cancer_dir = output_dir / "cancer_type" / cancer_type
+            cancer_dir.mkdir(parents=True, exist_ok=True)
+            csv_path = cancer_dir / "metrics.csv"
+            metrics_df.to_csv(csv_path)
+            print(f"   Saved {cancer_type} metrics: {csv_path}")
+    else:
+        # Results is a single DataFrame
+        csv_path = output_dir / "metrics.csv"
+        results.to_csv(csv_path)
+        print(f"\nSaved metrics to: {csv_path}")
+
+
 def compute_per_cancer_metrics_from_files(
     predictions_path: str | Path,
     probabilities_path: str | Path,
@@ -267,20 +406,20 @@ def compute_per_cancer_metrics_from_files(
     Returns:
         Dictionary mapping cancer type names to metric DataFrames
     """
-    predictions_path = Path(predictions_path)
-    probabilities_path = Path(probabilities_path)
-    
-    if not predictions_path.exists():
-        raise FileNotFoundError(f"Predictions file not found: {predictions_path}")
-    if not probabilities_path.exists():
-        raise FileNotFoundError(f"Probabilities file not found: {probabilities_path}")
-    
-    # Load predictions and probabilities
     print(f"Loading predictions from: {predictions_path}")
-    y_pred = pd.read_csv(predictions_path, index_col=0)
-    
     print(f"Loading probabilities from: {probabilities_path}")
-    y_prob = pd.read_csv(probabilities_path, index_col=0)
+    
+    # Load and align predictions
+    y_pred, y_prob, _ = _load_and_align_predictions(
+        predictions_path=predictions_path,
+        probabilities_path=probabilities_path,
+        y_true=y_true,
+        drop_fold_column=False,
+    )
+    
+    # Align y_true with the loaded predictions
+    common_index = y_pred.index
+    y_true = y_true.loc[common_index]
     
     # Compute per-cancer metrics
     results = compute_per_cancer_metrics(
@@ -293,17 +432,12 @@ def compute_per_cancer_metrics_from_files(
     
     # Save results if output directory provided
     if output_dir is not None:
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        print(f"\nSaving per-cancer metrics to: {output_dir}")
-        for cancer_type, metrics_df in results.items():
-            cancer_dir = output_dir / "cancer_type" / cancer_type
-            cancer_dir.mkdir(parents=True, exist_ok=True)
-            
-            csv_path = cancer_dir / "metrics.csv"
-            metrics_df.to_csv(csv_path)
-            print(f"   Saved {cancer_type} metrics: {csv_path}")
+        _save_metrics_results(
+            results=results,
+            output_dir=Path(output_dir),
+            per_cancer=True,
+            create_summary_files=False,
+        )
     
     return results
 
@@ -316,112 +450,130 @@ def compute_per_cancer_metrics_kfold(
     output_dir: str | Path | None = None,
 ) -> dict[str, pd.DataFrame]:
     """
-    Compute per-cancer-type metrics from k-fold cross-validation results.
+    Compute per-cancer-type metrics from predictions and probabilities in a directory,
+    and summarize gene predictions per cancer type in separate files for each metric.
     
-    This function processes k-fold results and computes per-cancer metrics,
-    optionally aggregating across folds.
+    This function processes predictions and probabilities from a single directory,
+    computes per-cancer metrics, and creates summary files where each metric
+    has genes as rows and cancer types (including 'overall') as columns.
     
     Args:
-        kfold_dir: Directory containing fold_*/ subdirectories with predictions.csv and probabilities.csv
+        kfold_dir: Directory containing predictions.csv and probabilities.csv
         y_true: True labels DataFrame (samples x genes)
         X: Optional expression DataFrame with cancer_* columns or matching index
         sample_to_cancer: Optional dictionary mapping sample IDs to cancer types
-        output_dir: Optional directory to save per-cancer metrics (aggregated across folds)
+        output_dir: Optional directory to save per-cancer metrics and summary files
     
     Returns:
         Dictionary mapping cancer type names to metric DataFrames
-        (aggregated mean and std across folds)
     """
     kfold_dir = Path(kfold_dir)
     
     if not kfold_dir.exists():
-        raise FileNotFoundError(f"K-fold directory not found: {kfold_dir}")
+        raise FileNotFoundError(f"Directory not found: {kfold_dir}")
     
-    # Find all fold directories
-    fold_dirs = sorted([d for d in kfold_dir.iterdir() if d.is_dir() and d.name.startswith('fold_')])
+    predictions_path = kfold_dir / "predictions.csv"
+    probabilities_path = kfold_dir / "probabilities.csv"
     
-    if len(fold_dirs) == 0:
-        raise ValueError(f"No fold directories found in {kfold_dir}")
+    if not predictions_path.exists():
+        raise FileNotFoundError(f"Predictions file not found: {predictions_path}")
+    if not probabilities_path.exists():
+        raise FileNotFoundError(f"Probabilities file not found: {probabilities_path}")
     
-    print(f"Processing {len(fold_dirs)} folds from: {kfold_dir}")
+    print(f"Processing predictions from: {kfold_dir}")
     
-    all_fold_results = []
+    # Compute per-cancer metrics
+    results = compute_per_cancer_metrics_from_files(
+        predictions_path=predictions_path,
+        probabilities_path=probabilities_path,
+        y_true=y_true,
+        X=X,
+        sample_to_cancer=sample_to_cancer,
+        output_dir=None,  # We'll handle saving ourselves
+    )
     
-    for fold_dir in fold_dirs:
-        fold_num = fold_dir.name.replace('fold_', '')
-        predictions_path = fold_dir / "predictions.csv"
-        probabilities_path = fold_dir / "probabilities.csv"
-        
-        if not predictions_path.exists() or not probabilities_path.exists():
-            print(f"   Warning: Missing files in {fold_dir}. Skipping...")
-            continue
-        
-        print(f"\n   Processing {fold_dir.name}...")
-        
-        try:
-            fold_results = compute_per_cancer_metrics_from_files(
-                predictions_path=predictions_path,
-                probabilities_path=probabilities_path,
-                y_true=y_true,
-                X=X,
-                sample_to_cancer=sample_to_cancer,
-            )
-            
-            # Add fold number to results
-            for cancer_type, metrics_df in fold_results.items():
-                metrics_df['fold'] = fold_num
-                all_fold_results.append((cancer_type, metrics_df))
-        
-        except Exception as e:
-            print(f"   Warning: Failed to process {fold_dir.name}: {e}")
-            continue
-    
-    if len(all_fold_results) == 0:
-        raise ValueError("No valid fold results found")
-    
-    # Aggregate results across folds by cancer type
-    print(f"\nAggregating results across {len(fold_dirs)} folds...")
-    aggregated_results = {}
-    
-    cancer_types = set(cancer_type for cancer_type, _ in all_fold_results)
-    
-    for cancer_type in sorted(cancer_types):
-        fold_metrics = [df for ct, df in all_fold_results if ct == cancer_type]
-        
-        if len(fold_metrics) == 0:
-            continue
-        
-        # Combine all folds
-        combined = pd.concat(fold_metrics, keys=range(len(fold_metrics)))
-        
-        # Group by gene and compute mean and std
-        summary = combined.groupby(level=1).agg(['mean', 'std'])
-        summary.columns = ["_".join(col).strip() for col in summary.columns.values]
-        
-        aggregated_results[cancer_type] = summary
-        print(f"   {cancer_type}: aggregated {len(fold_metrics)} folds")
-    
-    # Save aggregated results if output directory provided
+    # Save results with summary files
     if output_dir is not None:
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        print(f"\nSaving aggregated per-cancer metrics to: {output_dir}")
-        for cancer_type, metrics_df in aggregated_results.items():
-            cancer_dir = output_dir / "cancer_type" / cancer_type
-            cancer_dir.mkdir(parents=True, exist_ok=True)
-            
-            csv_path = cancer_dir / "metrics_aggregated.csv"
-            metrics_df.to_csv(csv_path)
-            print(f"   Saved {cancer_type} aggregated metrics: {csv_path}")
+        _save_metrics_results(
+            results=results,
+            output_dir=Path(output_dir),
+            per_cancer=True,
+            create_summary_files=True,
+        )
     
-    return aggregated_results
+    return results
+
+
+def compute_metrics_from_combined(
+    combined_predictions_dir: str | Path,
+    y_true: pd.DataFrame,
+    output_dir: str | Path | None = None,
+) -> pd.DataFrame:
+    """
+    Compute overall metrics from combined fold predictions.
+    
+    This function processes combined predictions from k-fold cross-validation
+    (where predictions from all folds have been combined) and computes overall
+    metrics across all samples, regardless of cancer type.
+    
+    Args:
+        combined_predictions_dir: Directory containing combined predictions.csv and 
+                                 probabilities.csv (may have 'fold' column)
+        y_true: True labels DataFrame (samples x genes)
+        output_dir: Optional directory to save metrics CSV file
+    
+    Returns:
+        DataFrame with genes as rows and metrics as columns
+    """
+    combined_predictions_dir = Path(combined_predictions_dir)
+    
+    if not combined_predictions_dir.exists():
+        raise FileNotFoundError(f"Combined predictions directory not found: {combined_predictions_dir}")
+    
+    predictions_path = combined_predictions_dir / "predictions.csv"
+    probabilities_path = combined_predictions_dir / "probabilities.csv"
+    
+    print(f"Processing combined predictions from: {combined_predictions_dir}")
+    
+    # Load and align predictions (automatically drops 'fold' column if present)
+    y_pred, y_prob, gene_names = _load_and_align_predictions(
+        predictions_path=predictions_path,
+        probabilities_path=probabilities_path,
+        y_true=y_true,
+        drop_fold_column=True,  # Drop fold column for combined predictions
+    )
+    
+    # Align y_true with the loaded predictions
+    common_index = y_pred.index
+    y_true = y_true.loc[common_index][gene_names]
+    
+    print(f"\nComputing overall metrics...")
+    print(f"   Samples: {len(common_index)}")
+    print(f"   Genes: {len(gene_names)}")
+    
+    # Compute overall metrics
+    metrics_df = evaluate_multilabel(
+        y_true=y_true.values,
+        y_pred=y_pred.values,
+        y_prob=y_prob.values,
+        mutation_names=gene_names,
+    )
+    
+    # Save results if output directory provided
+    if output_dir is not None:
+        _save_metrics_results(
+            results=metrics_df,
+            output_dir=Path(output_dir),
+            per_cancer=False,
+            create_summary_files=False,
+        )
+    
+    return metrics_df
 
 
 def combine_dataframe_folds(
     dataframes: list[pd.DataFrame],
     fold_numbers: list[int | str] | None = None,
-    include_fold_info: bool = True,
 ) -> pd.DataFrame:
     """
     Combine DataFrames from multiple folds into a single DataFrame.
@@ -432,7 +584,6 @@ def combine_dataframe_folds(
     Args:
         dataframes: List of DataFrames to combine (one per fold)
         fold_numbers: Optional list of fold numbers/identifiers (default: 1, 2, 3, ...)
-        include_fold_info: Whether to add a 'fold' column to the combined DataFrame
     
     Returns:
         Combined DataFrame with all samples from all folds
@@ -449,8 +600,7 @@ def combine_dataframe_folds(
     combined_list = []
     for df, fold_num in zip(dataframes, fold_numbers):
         df_copy = df.copy()
-        if include_fold_info:
-            df_copy['fold'] = fold_num
+        df_copy['fold'] = fold_num
         combined_list.append(df_copy)
     
     combined = pd.concat(combined_list, axis=0)
@@ -460,7 +610,6 @@ def combine_dataframe_folds(
 def combine_fold_predictions(
     kfold_dir: str | Path,
     output_dir: str | Path | None = None,
-    include_fold_info: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Combine predictions and probabilities from k-fold cross-validation results.
@@ -472,8 +621,7 @@ def combine_fold_predictions(
         kfold_dir: Directory containing fold_*/ subdirectories with predictions.csv and probabilities.csv
         output_dir: Optional directory to save combined predictions
                    If provided, saves to output_dir / "combined_predictions"
-        include_fold_info: Whether to include fold information in output files (default: True)
-    
+        
     Returns:
         Tuple of (combined_predictions_df, combined_probabilities_df)
         Both DataFrames have all samples from all folds, with optional 'fold' column
@@ -514,11 +662,10 @@ def combine_fold_predictions(
             pass
         
         # Add fold information if requested
-        if include_fold_info:
-            preds_df = preds_df.copy()
-            probs_df = probs_df.copy()
-            preds_df['fold'] = fold_num
-            probs_df['fold'] = fold_num
+        preds_df = preds_df.copy()
+        probs_df = probs_df.copy()
+        preds_df['fold'] = fold_num
+        probs_df['fold'] = fold_num
         
         combined_preds_list.append(preds_df)
         combined_probs_list.append(probs_df)
@@ -538,17 +685,9 @@ def combine_fold_predictions(
         combined_dir = output_dir / "combined_predictions"
         combined_dir.mkdir(parents=True, exist_ok=True)
         
-        # Save versions without fold column for cleaner usage
-        combined_preds_clean = combined_preds.drop(columns=['fold'], errors='ignore')
-        combined_probs_clean = combined_probs.drop(columns=['fold'], errors='ignore')
-        
-        combined_preds_clean.to_csv(combined_dir / "predictions.csv")
-        combined_probs_clean.to_csv(combined_dir / "probabilities.csv")
-        
-        # Also save with fold information if requested
-        if include_fold_info:
-            combined_preds.to_csv(combined_dir / "predictions_with_fold.csv")
-            combined_probs.to_csv(combined_dir / "probabilities_with_fold.csv")
+
+        combined_preds.to_csv(combined_dir / "predictions.csv")
+        combined_probs.to_csv(combined_dir / "probabilities.csv")
         
         print(f"   Saved to: {combined_dir}")
     

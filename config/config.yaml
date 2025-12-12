@@ -2,16 +2,16 @@
 data:
   # expression_path: "C:/Users/KerenYlab.MEDICINE/OneDrive - Technion/Asaf/Data/RNA/TCGA/Xena/tcga_xena_data"
   # mutation_path: "C:/Users/KerenYlab.MEDICINE/OneDrive - Technion/Asaf/Data/RNA/TCGA/Xena/tcga_xena_mutations_data"
-  expression_path: "C:/Users/KerenYlab/Asaf/CodingProjects/expression_to_mutation_prediction/Data/downloads"
-  mutation_path: "C:/Users/KerenYlab/Asaf/CodingProjects/expression_to_mutation_prediction/Data/downloads"
+  expression_path: "C:/Users/KerenYlab.MEDICINE/OneDrive - Technion/Asaf/Expression_to_Mutation/Data/downloads"
+  mutation_path: "C:/Users/KerenYlab.MEDICINE/OneDrive - Technion/Asaf/Expression_to_Mutation/Data/tcga_xena_mutations"
   cancer_types: []  # e.g., ["BRCA", "LUAD"]; empty list loads all available cohorts
   download_missing: true
   expression_base_url: "https://gdc-hub.s3.us-east-1.amazonaws.com/download"
-  mutation_base_url: "https://tcga-xena-hub.s3.us-east-1.amazonaws.com/download"
+  mutation_base_url: "https://gdc-hub.s3.us-east-1.amazonaws.com/download"
   expression_file_template: "TCGA-{cancer}.star_{measure}.tsv.gz"  # measure ∈ {"counts", "tpm"}
   mutation_file_template: "mc3_gene_level%2F{cancer}_mc3_gene_level.txt.gz"
-  gene_name_mapping_path: "C:/Users/KerenYlab/Asaf/CodingProjects/expression_to_mutation_prediction/Data/downloads/gencode.v36.annotation.gtf.gene.probemap"
-  gene_annotation_path: "C:/Users/KerenYlab/Asaf/CodingProjects/expression_to_mutation_prediction/Data/downloads/gencode.v36.annotation.gtf.gz"
+  gene_name_mapping_path: "C:/Users/KerenYlab.MEDICINE/OneDrive - Technion/Asaf/Expression_to_Mutation/Data/downloads/gencode.v36.annotation.gtf.gene.probemap"
+  gene_annotation_path: "C:/Users/KerenYlab.MEDICINE/OneDrive - Technion/Asaf/Expression_to_Mutation/Data/downloads/gencode.v36.annotation.gtf.gz"
   output_path: "results"
   min_mutations_per_gene: 0.05
 

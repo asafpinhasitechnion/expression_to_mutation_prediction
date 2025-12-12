@@ -15,6 +15,73 @@ except ImportError:
     SHAP_AVAILABLE = False
 
 
+def save_shap_summary(
+    shap_values: np.ndarray,
+    feature_names: list[str],
+    sample_ids: list[str] | pd.Index | None = None,
+    output_path: Path,
+    top_n: int = 10,
+) -> None:
+    """
+    Save a compact summary of SHAP values instead of the full matrix.
+    
+    For each sample, saves the top N features with their SHAP values and directions.
+    This is much more compact than saving the full (n_samples x n_features) matrix.
+    
+    Args:
+        shap_values: SHAP values array (n_samples, n_features)
+        feature_names: List of feature names
+        sample_ids: Optional list of sample IDs (default: range(n_samples))
+        output_path: Path to save the summary CSV
+        top_n: Number of top features to save per sample
+    """
+    n_samples, n_features = shap_values.shape
+    
+    if sample_ids is None:
+        sample_ids = [f"sample_{i}" for i in range(n_samples)]
+    elif isinstance(sample_ids, pd.Index):
+        sample_ids = sample_ids.tolist()
+    
+    # For each sample, get top N features by absolute SHAP value
+    summary_rows = []
+    
+    for sample_idx, sample_id in enumerate(sample_ids):
+        sample_shap = shap_values[sample_idx, :]
+        
+        # Get top N features by absolute SHAP value
+        top_indices = np.argsort(np.abs(sample_shap))[-top_n:][::-1]
+        
+        for feat_idx in top_indices:
+            feat_name = feature_names[feat_idx]
+            shap_val = sample_shap[feat_idx]
+            direction = 'positive' if shap_val > 0 else 'negative'
+            
+            summary_rows.append({
+                'sample_id': sample_id,
+                'feature': feat_name,
+                'shap_value': shap_val,
+                'abs_shap_value': abs(shap_val),
+                'direction': direction,
+                'rank': len([i for i in top_indices if np.abs(sample_shap[i]) > abs(shap_val)]) + 1,
+            })
+    
+    # Create DataFrame and save
+    summary_df = pd.DataFrame(summary_rows)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_df.to_csv(output_path, index=False)
+    
+    # Also save feature-level summary (mean absolute SHAP per feature)
+    feature_summary = pd.DataFrame({
+        'feature': feature_names,
+        'mean_abs_shap': np.mean(np.abs(shap_values), axis=0),
+        'std_abs_shap': np.std(np.abs(shap_values), axis=0),
+        'mean_shap': np.mean(shap_values, axis=0),
+    }).sort_values('mean_abs_shap', ascending=False)
+    
+    feature_summary_path = output_path.parent / f"{output_path.stem}_feature_summary.csv"
+    feature_summary.to_csv(feature_summary_path, index=False)
+
+
 def _get_model_type(model):
     """
     Determine the type of tree-based model for SHAP analysis.
