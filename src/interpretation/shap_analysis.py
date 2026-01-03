@@ -18,8 +18,8 @@ except ImportError:
 def save_shap_summary(
     shap_values: np.ndarray,
     feature_names: list[str],
-    sample_ids: list[str] | pd.Index | None = None,
     output_path: Path,
+    sample_ids: list[str] | pd.Index | None = None,
     top_n: int = 10,
 ) -> None:
     """
@@ -48,35 +48,37 @@ def save_shap_summary(
     for sample_idx, sample_id in enumerate(sample_ids):
         sample_shap = shap_values[sample_idx, :]
         
-        # Get top N features by absolute SHAP value
+        # Get top N features by absolute SHAP value (sorted descending)
         top_indices = np.argsort(np.abs(sample_shap))[-top_n:][::-1]
         
-        for feat_idx in top_indices:
+        for rank, feat_idx in enumerate(top_indices, start=1):
             feat_name = feature_names[feat_idx]
             shap_val = sample_shap[feat_idx]
-            direction = 'positive' if shap_val > 0 else 'negative'
             
             summary_rows.append({
                 'sample_id': sample_id,
                 'feature': feat_name,
                 'shap_value': shap_val,
-                'abs_shap_value': abs(shap_val),
-                'direction': direction,
-                'rank': len([i for i in top_indices if np.abs(sample_shap[i]) > abs(shap_val)]) + 1,
+                'rank': rank,  # Rank 1 = highest absolute SHAP value for this sample
             })
     
-    # Create DataFrame and save
+    # Create DataFrame and save (sorted by sample_id, then by rank)
     summary_df = pd.DataFrame(summary_rows)
+    summary_df = summary_df.sort_values(['sample_id', 'rank'])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     summary_df.to_csv(output_path, index=False)
     
-    # Also save feature-level summary (mean absolute SHAP per feature)
+    # Also save feature-level summary (aggregated across all samples)
+    # This provides overall feature importance, complementary to per-sample data
     feature_summary = pd.DataFrame({
         'feature': feature_names,
-        'mean_abs_shap': np.mean(np.abs(shap_values), axis=0),
-        'std_abs_shap': np.std(np.abs(shap_values), axis=0),
-        'mean_shap': np.mean(shap_values, axis=0),
-    }).sort_values('mean_abs_shap', ascending=False)
+        'mean_abs_shap': np.mean(np.abs(shap_values), axis=0),  # Overall importance
+        'mean_shap': np.mean(shap_values, axis=0),  # Average direction (positive/negative)
+    })
+    
+    # Remove features with zero SHAP value (no contribution)
+    feature_summary = feature_summary[feature_summary['mean_abs_shap'] > 0].copy()
+    feature_summary = feature_summary.sort_values('mean_abs_shap', ascending=False)
     
     feature_summary_path = output_path.parent / f"{output_path.stem}_feature_summary.csv"
     feature_summary.to_csv(feature_summary_path, index=False)

@@ -422,6 +422,20 @@ class MultitaskMutationNet(nn.Module):
             if isinstance(module, nn.Linear):
                 return module.weight.detach().clone()
         raise ValueError("No Linear layer found in head")
+    
+    def get_encoder_output(self, x):
+        """
+        Get the encoder/feature extractor output for input samples.
+        
+        Args:
+            x: Input tensor of shape (batch_size, input_size)
+        
+        Returns:
+            torch.Tensor: Encoder output of shape (batch_size, hidden_size)
+                         where hidden_size is the last dimension of the encoder
+        """
+        with torch.no_grad():
+            return self.feature_extractor(x)
 
 
 class MultitaskMutationModel(BaseModel):
@@ -694,6 +708,30 @@ class MultitaskMutationModel(BaseModel):
         if self.model is None:
             raise ValueError("Model has not been trained yet. Call fit() or fit_full_dataset() first.")
         return self.model.get_head_weights()
+    
+    def get_sample_embeddings(self, X: np.ndarray | pd.DataFrame):
+        """
+        Get encoder/feature extractor embeddings for input samples.
+        
+        Args:
+            X: Input features (numpy array or DataFrame)
+        
+        Returns:
+            torch.Tensor: Sample embeddings of shape (n_samples, hidden_size)
+                         where hidden_size is the last dimension of the encoder
+        """
+        if self.model is None:
+            raise ValueError("Model has not been trained yet. Call fit() or fit_full_dataset() first.")
+        
+        if isinstance(X, pd.DataFrame):
+            X = X.values
+        
+        X = np.asarray(X, dtype=np.float32)
+        if self.normalize_inputs and self.scaler is not None:
+            X = self.scaler.transform(X).astype(np.float32)
+        
+        X_tensor = torch.from_numpy(X).to(self.device)
+        return self.model.get_encoder_output(X_tensor)
 
     def _run_epoch(self, loader: DataLoader, train: bool = True) -> float:
         if train:

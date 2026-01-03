@@ -48,15 +48,14 @@ model:
     epochs: 50
     normalize_inputs: true
   multitask_nn:
-    hidden_layers: [512, 256, 128]
-    dropout_rate: 0.2
-    head_layers: []
+    hidden_layers: [512, 256]
+    dropout_rate: 0.3
     learning_rate: 0.0005
-    weight_decay: 0.0001
-    batch_size: 128
-    epochs: 60
+    weight_decay: 0.0003
+    batch_size: 32
+    epochs: 80
+    patience: 15
     validation_split: 0.15
-    patience: 10
     gradient_clip: 1.0
     use_pos_weight: true
     gene_weight_by_prevalence: false  # Weight genes by mutation frequency (more frequent = higher weight)

@@ -87,6 +87,7 @@ def train_and_extract_head_weights(
     gene_weights["all_weights"] = head_weight_matrix
     gene_weights["gene_names"] = mutation_names
     gene_weights["weight_matrix_shape"] = head_weight_matrix.shape
+    gene_weights["model"] = model  # Include the trained model for reuse
     
     # Save weights and metadata if output_dir is provided
     if output_dir is not None:
@@ -114,3 +115,101 @@ def train_and_extract_head_weights(
     
     return gene_weights
 
+
+def extract_sample_embeddings(
+    model,
+    X: np.ndarray | pd.DataFrame,
+    sample_ids: list[str] | pd.Index | None = None,
+    output_dir: str | Path | None = None,
+    batch_size: int = 128,
+) -> dict:
+    """
+    Extract sample embeddings from the encoder/feature extractor of a trained multitask model.
+    
+    Args:
+        model: Trained MultitaskMutationModel instance
+        X: Expression data (features) - numpy array or DataFrame
+        sample_ids: Optional list of sample IDs. If None and X is DataFrame, uses X.index
+        output_dir: Optional directory to save embeddings
+        batch_size: Batch size for processing samples (default: 128)
+    
+    Returns:
+        Dictionary with:
+        - 'embeddings': numpy array of shape (n_samples, hidden_size)
+        - 'sample_ids': list of sample IDs
+        - 'embedding_dim': int, the dimension of embeddings
+        - 'embeddings_df': DataFrame with samples as rows and embedding dimensions as columns
+    """
+    from torch.utils.data import DataLoader, TensorDataset
+    
+    if isinstance(X, pd.DataFrame):
+        X_values = X.values
+        if sample_ids is None:
+            sample_ids = X.index.tolist()
+    else:
+        X_values = np.asarray(X, dtype=np.float32)
+        if sample_ids is None:
+            sample_ids = [f"sample_{i}" for i in range(X_values.shape[0])]
+    
+    if isinstance(sample_ids, pd.Index):
+        sample_ids = sample_ids.tolist()
+    
+    n_samples = X_values.shape[0]
+    
+    print(f"\n🔬 Extracting sample embeddings from encoder...")
+    print(f"   Samples: {n_samples}")
+    
+    # Get embeddings in batches
+    model.model.eval()
+    all_embeddings = []
+    
+    with torch.no_grad():
+        # Process in batches to handle large datasets
+        for i in range(0, n_samples, batch_size):
+            batch_X = X_values[i:i+batch_size]
+            batch_embeddings = model.get_sample_embeddings(batch_X)
+            all_embeddings.append(batch_embeddings.cpu())
+    
+    # Concatenate all embeddings
+    embeddings_tensor = torch.cat(all_embeddings, dim=0)
+    embeddings_array = embeddings_tensor.numpy()
+    
+    embedding_dim = embeddings_array.shape[1]
+    
+    print(f"   Embedding dimension: {embedding_dim}")
+    print(f"   Embeddings shape: {embeddings_array.shape}")
+    
+    # Create DataFrame
+    embeddings_df = pd.DataFrame(
+        embeddings_array,
+        index=sample_ids,
+        columns=[f"dim_{i}" for i in range(embedding_dim)]
+    )
+    
+    # Save if output_dir is provided
+    if output_dir is not None:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Save as numpy array
+        np.save(output_dir / "sample_embeddings.npy", embeddings_array)
+        
+        # Save as DataFrame CSV
+        embeddings_df.to_csv(output_dir / "sample_embeddings.csv")
+        
+        # Save sample IDs
+        with open(output_dir / "sample_ids.json", "w") as f:
+            json.dump(sample_ids, f, indent=2)
+        
+        print(f"   Embeddings saved to: {output_dir}")
+    
+    result = {
+        'embeddings': embeddings_array,
+        'sample_ids': sample_ids,
+        'embedding_dim': embedding_dim,
+        'embeddings_df': embeddings_df,
+    }
+    
+    print(f"✅ Sample embeddings extracted!")
+    
+    return result

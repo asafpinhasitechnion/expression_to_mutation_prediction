@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -273,6 +274,7 @@ def run_gene_ablation_analysis(
     output_dir: str | Path | None = None,
     save_results: bool = True,
     sample_to_cancer: dict[str, str] | None = None,
+    remove_fold_folders: bool = True,
 ) -> dict[str, pd.DataFrame]:
     """
     Run ablation analysis with baseline comparison using matching train/test splits.
@@ -300,6 +302,8 @@ def run_gene_ablation_analysis(
                        - Baseline: baseline_predictions.csv, baseline_probabilities.csv (with 'fold' column)
                        - Per gene (in {gene}/ subfolder): predictions.csv, probabilities.csv (with 'fold' column)
                      - Difference matrices: difference_matrix_{metric}.csv (in main output_dir)
+        remove_fold_folders: Whether to delete individual fold folders after combining predictions
+                           (only applies to kfold mode, default: True). Set to False to keep fold folders.
     
     Returns:
         Dictionary mapping metric names to difference DataFrames (removed_gene × evaluated_gene).
@@ -512,6 +516,22 @@ def run_gene_ablation_analysis(
         
         print(f"   Ablation predictions combined for {len(mutation_names)} genes")
         print(f"   Combined predictions saved to: {combined_dir}")
+        
+        # Delete fold folders to save disk space after combining (if requested)
+        if remove_fold_folders:
+            print(f"\nRemoving fold folders to save disk space...")
+            deleted_folds = 0
+            for fold_idx in sorted_fold_indices:
+                fold_dir = output_dir / f"fold_{fold_idx}"
+                if fold_dir.exists() and fold_dir.is_dir():
+                    try:
+                        shutil.rmtree(fold_dir)
+                        deleted_folds += 1
+                        print(f"   Deleted fold_{fold_idx}")
+                    except Exception as e:
+                        print(f"   Warning: Could not delete fold_{fold_idx}: {e}")
+            if deleted_folds > 0:
+                print(f"   Removed {deleted_folds} fold folder(s)")
         
         # Compute per-cancer-type difference matrices from combined predictions
         if isinstance(X, pd.DataFrame) or sample_to_cancer is not None:
